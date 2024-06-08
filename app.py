@@ -45,6 +45,8 @@ def add_user_to_g():
 
     else:
         g.user = None
+        
+
 
 
 def do_login(user):

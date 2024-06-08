@@ -27,7 +27,7 @@
       </a>
     </div>
     <ul class="nav navbar-nav navbar-right">
-      {% if request.endpoint != None %}
+      {% if g.user and request.endpoint != None %}
       <li>
         <form class="navbar-form navbar-right" action="/users">
           <input name="q" class="form-control" placeholder="Search Warbler" id="search">
