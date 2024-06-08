@@ -12,11 +12,22 @@
             <img src="{{ user.image_url }}" alt="user image" class="timeline-image">
           </a>
 
-          <div class="message-area">
-            <a href="/users/{{ user.id }}">@{{ user.username }}</a>
+          <div class="message-area"> 
+             <a href="/users/{{ message.user.id }}">@{{ message.user.username }}</a>
             <span class="text-muted">{{ message.timestamp.strftime('%d %B %Y') }}</span>
             <p>{{ message.text }}</p>
           </div>
+          {% if g.user.id != message.user_id %}
+          <form method="POST" action="/users/add_like/{{ message.id }}?next=/users/{{ user.id }}" id="messages-form">
+            <button class="
+              btn 
+              btn-sm 
+              {{'btn-primary' if message.id in likes else 'btn-secondary'}}"
+            >
+              <i class="fa fa-thumbs-up"></i> 
+            </button>
+          </form>
+          {% endif %}
         </li>
 
       {% endfor %}

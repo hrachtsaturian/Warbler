@@ -463,6 +463,11 @@ p.card-bio {
   text-align: left;
 }
 
+.header-image {
+  width: 100%;
+  height: auto;
+}
+
 /* ========================== Signup/Login */
 
 #user_form input.form-control {

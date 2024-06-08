@@ -1,11 +1,12 @@
 import os
 
 from flask import Flask, render_template, request, flash, redirect, session, g
+from sqlalchemy import desc
 from flask_debugtoolbar import DebugToolbarExtension
 from sqlalchemy.exc import IntegrityError
 
 from forms import UserAddForm, LoginForm, MessageForm, EditForm
-from models import db, connect_db, User, Message
+from models import db, connect_db, User, Message, Likes
 
 CURR_USER_KEY = "curr_user"
 
@@ -17,12 +18,18 @@ app.config['SQLALCHEMY_DATABASE_URI'] = (
     os.environ.get('DATABASE_URL', 'postgresql:///warbler'))
 
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SQLALCHEMY_ECHO'] = False
+app.config['SQLALCHEMY_ECHO'] = True
 app.config['DEBUG_TB_INTERCEPT_REDIRECTS'] = True
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', "it's a secret")
-toolbar = DebugToolbarExtension(app)
 
 connect_db(app)
+
+with app.app_context():
+    db.create_all()
+
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', "it's a secret")
+
+toolbar = DebugToolbarExtension(app)
+
 
 
 ##############################################################################
@@ -74,6 +81,9 @@ def signup():
                 password=form.password.data,
                 email=form.email.data,
                 image_url=form.image_url.data or User.image_url.default.arg,
+                header_image_url=form.header_image_url.data or User.header_image_url.default.arg,
+                location=form.location.data,
+                bio=form.bio.data
             )
             db.session.commit()
 
@@ -113,7 +123,7 @@ def login():
 def logout():
     """Handle logout of user."""
 
-    session.pop("username")
+    session.pop(CURR_USER_KEY)
     return redirect("/login")
 
 
@@ -151,7 +161,10 @@ def users_show(user_id):
                 .order_by(Message.timestamp.desc())
                 .limit(100)
                 .all())
-    return render_template('users/show.html', user=user, messages=messages)
+    
+    liked_msg_ids = [msg.id for msg in g.user.likes]
+
+    return render_template('users/show.html', user=user, messages=messages, likes=liked_msg_ids)
 
 
 @app.route('/users/<int:user_id>/following')
@@ -185,6 +198,7 @@ def add_follow(follow_id):
     if not g.user:
         flash("Access unauthorized.", "danger")
         return redirect("/")
+    
 
     followed_user = User.query.get_or_404(follow_id)
     g.user.following.append(followed_user)
@@ -216,25 +230,38 @@ def profile():
         flash("Access unauthorized.", "danger")
         return redirect("/")
     
-    form = EditForm()
+    user = g.user
+    form = EditForm(obj=user)
 
     if form.validate_on_submit():
-        username = form.username.data
-        email = form.email.data
-        image_url = form.image_url.data
-        header_image_url = form.header_image_url.data
-        bio = form.bio.data
-        password = form.password.data
+        if not User.authenticate(user.username, form.password.data):
+            flash('Password incorrect!', 'danger')
+            return redirect('/users/profile')
+        
+        
 
-        user = User.authenticate(username, email, image_url, header_image_url, bio, password)
-        if user:
-            session['password'] = user.password
-            return redirect(f'/users/{user.id}')
-        else: 
-            form.password.errors = ["Invalid password."]
-            return redirect("/")
+        try: 
+            user.username = form.username.data
+            user.email = form.email.data
+            user.image_url = form.image_url.data or "/static/images/default-pic.png"
+            user.header_image_url = form.header_image_url.data or "/static/images/warbler-hero.jpg"
+            user.bio = form.bio.data
+
+            db.session.commit()
+
+            
+
+            return redirect(f"/users/{user.id}")
+        
+
+ 
+        except IntegrityError:
+            flash('Invalid input', 'danger')
+            return redirect("/users/profile")
     
-    return render_template("users/detail.html", form=form)
+
+    else:
+        return render_template("users/edit.html", form=form, user_id=user.id)
 
 @app.route('/users/delete', methods=["POST"])
 def delete_user():
@@ -245,6 +272,7 @@ def delete_user():
         return redirect("/")
 
     do_logout()
+
 
     db.session.delete(g.user)
     db.session.commit()
@@ -314,13 +342,19 @@ def homepage():
     """
 
     if g.user:
+        following_users = [f.id for f in g.user.following] + [g.user.id]
+        
         messages = (Message
                     .query
-                    .order_by(Message.timestamp.desc())
+                    .filter(Message.user_id.in_(following_users))
+                    .order_by(desc(Message.timestamp))
                     .limit(100)
                     .all())
+        
+        liked_msg_ids = [msg.id for msg in g.user.likes]
 
-        return render_template('home.html', messages=messages)
+
+        return render_template('home.html', messages=messages, likes=liked_msg_ids)
 
     else:
         return render_template('home-anon.html')
@@ -342,3 +376,55 @@ def add_header(req):
     req.headers["Expires"] = "0"
     req.headers['Cache-Control'] = 'public, max-age=0'
     return req
+
+
+##############################################################################
+# Likes routes
+
+@app.route('/users/add_like/<int:msg_id>', methods=['POST'])
+def add_like(msg_id):
+
+    next = request.args.get('next')
+
+    if not g.user:
+        flash("Access unauthorized.", "danger")
+        return redirect("/")
+    
+    message = Message.query.get_or_404(msg_id)
+    if message.user.id == g.user.id:
+        raise Exception # improves error handling
+    
+    like = Likes.query.filter_by(message_id=msg_id, user_id=g.user.id).first()
+    
+    if not like:
+        new_like = Likes(message_id=msg_id, user_id=g.user.id)
+
+        db.session.add(new_like)
+
+    else:
+        db.session.delete(like)
+        
+
+    db.session.commit() 
+
+    if next:
+        return redirect(next)
+    
+    return redirect('/')
+
+
+@app.route('/users/<int:user_id>/likes')
+def user_likes(user_id):
+    """Show list of likes of this user."""
+
+    if not g.user:
+        flash("Access unauthorized.", "danger")
+        return redirect("/")
+
+    user = User.query.get_or_404(user_id)
+
+    liked_msg_ids = [msg.id for msg in g.user.likes]
+    
+
+
+    return render_template('users/likes.html', user=user, messages=user.likes, likes=liked_msg_ids)
